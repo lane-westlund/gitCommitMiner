@@ -54,6 +54,31 @@ function buildCommitParameters {
     newOutput+="$newCommitMessage"
 }
 
+# Function to display usage
+function usage {
+    echo "Usage: $0 -d <difficulty>"
+    exit 1
+}
+
+difficulty=4
+
+# Parse command line arguments
+while getopts ":d:" opt; do
+    case ${opt} in
+        d )
+            difficulty=$OPTARG
+            ;;
+        \? )
+            usage
+            ;;
+    esac
+done
+
+if ! [[ "$difficulty" =~ ^[0-9]+$ ]]; then
+    usage
+fi
+desiredHeaderStart=$(printf "%0${difficulty}d" 0)
+
 getCommitParameters
 while true; do
     buildCommitParameters
@@ -63,7 +88,7 @@ while true; do
         echo "Someone else modified our hash, exiting"
         exit 0
     fi
-    if [[ $hash == 0000* ]]; then
+    if [[ $hash == $desiredHeaderStart* ]]; then
         echo "Commit hash starting with 0 found: $hash"
         break
     fi
