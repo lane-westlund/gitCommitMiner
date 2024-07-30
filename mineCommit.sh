@@ -56,16 +56,16 @@ function buildCommitParameters {
 
 getCommitParameters
 while true; do
-    current_hash=$(git rev-parse HEAD)
     buildCommitParameters
     hash=$((printf "commit %s\0" $(echo -e "$newOutput" | wc -c); echo -e "$newOutput")|sha1sum)
-    if [[ $hash == 0000* ]]; then
-        echo "Commit hash starting with 0 found: $hash"
-        break
-    fi
+    current_hash=$(git rev-parse HEAD)
     if [ "$current_hash" != "$start_hash" ]; then
         echo "Someone else modified our hash, exiting"
         exit 0
+    fi
+    if [[ $hash == 0000* ]]; then
+        echo "Commit hash starting with 0 found: $hash"
+        break
     fi
 done
 
