@@ -1,39 +1,73 @@
 #!/bin/bash
 
-# Ensure you are in a git repository
-if [ ! -d ".git" ]; then
-    echo "This script must be run from the root of a git repository."
-    exit 1
-fi
+function getCommitParameters {
+    # Get the output of `git cat-file -p HEAD`
+    output=$(git cat-file -p HEAD)
 
-# Function to get the latest commit hash
-get_commit_hash() {
-    git rev-parse HEAD
+    # Initialize variables
+    tree=""
+    parent=""
+    author_name=""
+    author_email=""
+    author_date=""
+    committer_name=""
+    committer_email=""
+    committer_date=""
+    commit_message=""
+
+    # Parse the output
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^tree\ ([a-f0-9]+)$ ]]; then
+            tree="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^parent\ ([a-f0-9]+)$ ]]; then
+            parent="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^author\ (.+)\ \<(.+)\>\ ([0-9]+)\ ([+-][0-9]+)$ ]]; then
+            author_name="${BASH_REMATCH[1]}"
+            author_email="${BASH_REMATCH[2]}"
+            author_date="${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+        elif [[ "$line" =~ ^committer\ (.+)\ \<(.+)\>\ ([0-9]+)\ ([+-][0-9]+)$ ]]; then
+            committer_name="${BASH_REMATCH[1]}"
+            committer_email="${BASH_REMATCH[2]}"
+            committer_date="${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+        elif [[ -z "$line" ]]; then
+            break
+        fi
+    done <<< "$output"
+
+    # Read the commit message
+    commit_message=$(echo "$output" | sed -n '/^$/,$p' | tail -n +2)
 }
 
-# Function to get the original commit message (without the random number)
-get_original_commit_message() {
-    # Extract the commit message and remove the appended random number if it exists
-    git log -1 --pretty=%s
+function buildCommitParameters {
+    # Format the output
+    newOutput="tree $tree"
+    if [ -n "$parent" ]; then
+        newOutput+="\nparent $parent"
+    fi
+    newOutput+="\nauthor $author_name <$author_email> $author_date"
+    newOutput+="\ncommitter $committer_name <$committer_email> $committer_date"
+    newOutput+="\n\n"
+    newCommitMessage="$commit_message"
+    hexRandom=$(printf '%x\n' $SRANDOM)
+    newCommitMessage+="\n\n$hexRandom"
+    newOutput+="$newCommitMessage"
 }
 
-# Amend the commit until the hash starts with 0
+getCommitParameters
 while true; do
-    # Generate a random number
-    random_number=$RANDOM
-    
-    # Get the original commit message without the random number
-    original_commit_message=$(get_original_commit_message)
-    
-    # Amend the last commit with the original commit message and a new random number appended
-    git commit --quiet --amend -m "$original_commit_message" -m "$random_number"
-    
-    # Get the new commit hash
-    hash=$(get_commit_hash)
-    
-    # Check if the hash starts with 0
+    buildCommitParameters
+    hash=$((printf "commit %s\0" $(echo -e "$newOutput" | wc -c); echo -e "$newOutput")|sha1sum)
     if [[ $hash == 000* ]]; then
         echo "Commit hash starting with 0 found: $hash"
         break
     fi
 done
+
+export GIT_AUTHOR_DATE="$author_date"
+export GIT_COMMITTER_DATE="$committer_date"
+temp_file=$(mktemp)
+echo -e "$newCommitMessage" > "$temp_file"
+git commit --amend -F "$temp_file"
+rm "$temp_file"
+unset GIT_AUTHOR_DATE
+unset GIT_COMMITTER_DATE
