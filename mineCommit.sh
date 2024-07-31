@@ -56,17 +56,21 @@ function buildCommitParameters {
 
 # Function to display usage
 function usage {
-    echo "Usage: $0 -d <difficulty>"
+    echo "Usage: $0 -d <difficulty> -j <number of threads>"
     exit 1
 }
 
 difficulty=4
+threads=1
 
 # Parse command line arguments
-while getopts ":d:" opt; do
+while getopts ":d:j:" opt; do
     case ${opt} in
         d )
             difficulty=$OPTARG
+            ;;
+        j )
+            threads=$OPTARG
             ;;
         \? )
             usage
@@ -77,8 +81,19 @@ done
 if ! [[ "$difficulty" =~ ^[0-9]+$ ]]; then
     usage
 fi
-desiredHeaderStart=$(printf "%0${difficulty}d" 0)
 
+# Check if j is a valid integer
+if ! [[ "$threads" =~ ^-?[0-9]+$ ]]; then
+  echo "Error: -j must be an integer."
+  exit 1
+fi
+
+if [ $threads -gt 1 ]; then
+    ./$(basename $0) -j $((threads - 1)) -d $difficulty &
+fi
+
+desiredHeaderStart="$(printf "%0${difficulty}d" 0)"
+echo "looking for commit starting with $desiredHeaderStart"
 getCommitParameters
 while true; do
     buildCommitParameters
@@ -89,7 +104,7 @@ while true; do
         exit 0
     fi
     if [[ $hash == $desiredHeaderStart* ]]; then
-        echo "Commit hash starting with 0 found: $hash"
+        echo "Commit hash starting with $desiredHeaderStart found: $hash"
         break
     fi
 done
@@ -98,7 +113,7 @@ export GIT_AUTHOR_DATE="$author_date"
 export GIT_COMMITTER_DATE="$committer_date"
 temp_file=$(mktemp)
 echo -e "$newCommitMessage" > "$temp_file"
-git commit --amend -F "$temp_file"
+git commit -q --amend -F "$temp_file"
 rm "$temp_file"
 unset GIT_AUTHOR_DATE
 unset GIT_COMMITTER_DATE
