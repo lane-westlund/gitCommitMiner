@@ -11,10 +11,12 @@ function getCommitParameters {
     author_name=""
     author_email=""
     author_date=""
+    author_date_zone=""
     committer_name=""
     committer_email=""
     committer_date=""
     commit_message=""
+    committer_date_zone=""
 
     # Parse the output
     while IFS= read -r line; do
@@ -25,11 +27,13 @@ function getCommitParameters {
         elif [[ "$line" =~ ^author\ (.+)\ \<(.+)\>\ ([0-9]+)\ ([+-][0-9]+)$ ]]; then
             author_name="${BASH_REMATCH[1]}"
             author_email="${BASH_REMATCH[2]}"
-            author_date="${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+            author_date="${BASH_REMATCH[3]}"
+            author_date_zone="${BASH_REMATCH[4]}"
         elif [[ "$line" =~ ^committer\ (.+)\ \<(.+)\>\ ([0-9]+)\ ([+-][0-9]+)$ ]]; then
             committer_name="${BASH_REMATCH[1]}"
             committer_email="${BASH_REMATCH[2]}"
-            committer_date="${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+            committer_date="${BASH_REMATCH[3]}"
+            committer_date_zone="${BASH_REMATCH[4]}"
         elif [[ -z "$line" ]]; then
             break
         fi
@@ -39,20 +43,50 @@ function getCommitParameters {
     commit_message=$(echo "$output" | sed -n '/^$/,$p' | tail -n +2)
 }
 
-function buildCommitParameters {
+function buildCommitParametersWithNonce {
     # Format the output
     newOutput="tree $tree"
     if [ -n "$parent" ]; then
         newOutput+="\nparent $parent"
     fi
-    newOutput+="\nauthor $author_name <$author_email> $author_date"
-    newOutput+="\ncommitter $committer_name <$committer_email> $committer_date"
+    newOutput+="\nauthor $author_name <$author_email> $author_date $author_date_zone"
+    newOutput+="\ncommitter $committer_name <$committer_email> $committer_date $committer_date_zone"
     newOutput+="\n\n"
     newCommitMessage="$commit_message"
     hexRandom=$(printf '%x\n' $SRANDOM)
     newCommitMessage+="\n\n$hexRandom"
     newOutput+="$newCommitMessage"
 }
+
+function buildCommitParametersWithTime {
+
+    ((committerDateModifier++))
+    if [ $committerDateModifier -gt 720 ]; then
+        ((authorDateModifier++))
+        committerDateModifier=$authorDateModifier
+    fi
+
+    #echo "Author: $authorDateModifier Commit: $committerDateModifier"
+
+    if [ $authorDateModifier -gt 720 ]; then
+        echo "no hash found using stealth mode, change the commit message and try again, or don't use stealth"
+        exit 0
+    fi
+
+    new_author_date=$((author_date + authorDateModifier))
+    new_committer_date=$((committer_date + committerDateModifier))
+
+    newOutput="tree $tree"
+    if [ -n "$parent" ]; then
+        newOutput+="\nparent $parent"
+    fi
+    newOutput+="\nauthor $author_name <$author_email> $new_author_date $author_date_zone"
+    newOutput+="\ncommitter $committer_name <$committer_email> $new_committer_date $committer_date_zone"
+    newOutput+="\n\n"
+    newOutput+="$commit_message"
+    newCommitMessage="$commit_message"
+}
+
 
 # Function to display usage
 function usage {
@@ -62,15 +96,19 @@ function usage {
 
 difficulty=4
 threads=1
+stealth=0
 
 # Parse command line arguments
-while getopts ":d:j:" opt; do
+while getopts ":d:j:s:" opt; do
     case ${opt} in
         d )
             difficulty=$OPTARG
             ;;
         j )
             threads=$OPTARG
+            ;;
+        s )
+            stealth=$OPTARG
             ;;
         \? )
             usage
@@ -88,6 +126,14 @@ if ! [[ "$threads" =~ ^-?[0-9]+$ ]]; then
   exit 1
 fi
 
+if [ $stealth -gt 0 ]; then
+    threads=0
+    echo "stealth mode enabled"
+fi
+
+authorDateModifier=1
+committerDateModifier=1
+
 if [ $threads -gt 1 ]; then
     ./$(basename $0) -j $((threads - 1)) -d $difficulty &
 fi
@@ -96,7 +142,11 @@ desiredHeaderStart="$(printf "%0${difficulty}d" 0)"
 echo "looking for commit starting with $desiredHeaderStart"
 getCommitParameters
 while true; do
-    buildCommitParameters
+    if [ "$stealth" -eq 0 ]; then
+        buildCommitParametersWithNonce
+    else
+        buildCommitParametersWithTime
+    fi
     hash=$((printf "commit %s\0" $(echo -e "$newOutput" | wc -c); echo -e "$newOutput")|sha1sum)
     current_hash=$(git rev-parse HEAD)
     if [ "$current_hash" != "$start_hash" ]; then
@@ -105,15 +155,18 @@ while true; do
     fi
     if [[ $hash == $desiredHeaderStart* ]]; then
         echo "Commit hash starting with $desiredHeaderStart found: $hash"
+        echo -e "$newOutput"
         break
     fi
 done
 
-export GIT_AUTHOR_DATE="$author_date"
+author_date=$((author_date + authorDateModifier))
+committer_date=$((committer_date + committerDateModifier))
+
 export GIT_COMMITTER_DATE="$committer_date"
+echo "author: $GIT_AUTHOR_DATE committer: $GIT_COMMITTER_DATE"
 temp_file=$(mktemp)
 echo -e "$newCommitMessage" > "$temp_file"
-git commit -q --amend -F "$temp_file"
+git commit --amend -F "$temp_file" --date="$author_date"
 rm "$temp_file"
-unset GIT_AUTHOR_DATE
 unset GIT_COMMITTER_DATE
